@@ -2,6 +2,14 @@
 
 A starter template for building your own AI bot to compete in [CopperHead](https://github.com/revodavid/copperhead-server) Snake tournaments.
 
+## What you'll need
+
+1. A running CopperHead Server. You can launch one by following the instructions at the [`copperhead-server`](https://github.com/your-username/copperhead-server) repository.
+
+2. An environment to run your bot. You can use CodeSpaces on this repository, or your own laptop with Python 3.10+ installed.
+
+3. A [CopperHead client](https://github.com/revodavid/copperhead-client) to watch your bot play. You can use the "Play Now" link in the that appears in the CopperHead Server CodeSpace to open the client in a browser.
+
 ## Quick Start
 
 ### 1. Set up your environment
@@ -21,18 +29,39 @@ You can develop your bot in **GitHub Codespaces** (recommended) or locally.
 
 ### 2. Run your bot
 
-```bash
-python mybot.py --server ws://localhost:8765/ws/
-```
-
-For a CopperHead server running in Codespaces, use the `wss://` URL shown in the terminal:
+Run your bot and join the CopperHead tournament server with:
 ```bash
 python mybot.py --server wss://your-codespace-url.app.github.dev/ws/
 ```
 
-### 3. Customize your bot
+You can find the tournament server URL at the bottom of the lobby screen in the CopperHead Client webpage. It will look like `wss://your-codespace-url.app.github.dev/ws/`.
+
+Your bot will join the server and play a matches until the tournament is complete. You will need to relaunch your bot to join a new tournament after the current one finishes.
+
+### 3. Customize your bot with GitHub Copilot CLI
+
+The easiest way to improve your bot is with **GitHub Copilot CLI** — just describe what you want in plain English. In your Codespace terminal, run:
+
+```bash
+copilot
+```
+
+This starts an interactive session where you can ask Copilot to modify your code. For example, try prompts like:
+
+- *"Name my bot 'Slytherin'"*
+- *"Make my bot prioritize eating grapes over any other food"*
+- *"Add flood fill to mybot.py so my snake avoids moving into dead ends"*
+- *"Make my bot play more aggressively when it's longer than the opponent"*
+- *"Add a strategy to mybot.py that blocks the opponent from reaching food"*
+
+Copilot CLI understands your code and can make changes directly to `mybot.py`. You can review each change before accepting it, and keep iterating until your bot plays the way you want.
+
+> **Tip:** You don't need to be an expert programmer — just describe the *behavior* you want and let Copilot handle the code!
+
+### 4. (For developers) Customize your bot manually
 
 Open `mybot.py` and look for the `calculate_move()` function (around line 200). This is where your bot decides which direction to move each tick. The default strategy is simple — chase food and avoid walls. You can do much better!
+
 
 ## Command Line Options
 
