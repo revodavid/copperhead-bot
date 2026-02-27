@@ -37,6 +37,11 @@ import websockets
 #  BOT CONFIGURATION - Change these to customize your bot
 # ============================================================================
 
+# The CopperHead server to connect to. Set this to your server's URL so you
+# don't need to pass --server every time. Use "ws://" for local servers or
+# "wss://" for Codespaces/remote servers.
+GAME_SERVER = "ws://localhost:8765/ws/"
+
 # Your bot's display name (shown to all players in the tournament)
 BOT_NAME = "MyBot"
 
@@ -379,8 +384,8 @@ class MyBot:
 
 async def main():
     parser = argparse.ArgumentParser(description="CopperHead Bot")
-    parser.add_argument("--server", "-s", default="ws://localhost:8765/ws/",
-                        help="Server WebSocket URL (default: ws://localhost:8765/ws/)")
+    parser.add_argument("--server", "-s", default=GAME_SERVER,
+                        help=f"Server WebSocket URL (default: {GAME_SERVER})")
     parser.add_argument("--name", "-n", default=None,
                         help=f"Bot display name (default: {BOT_NAME})")
     args = parser.parse_args()
