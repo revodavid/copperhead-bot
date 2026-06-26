@@ -49,6 +49,16 @@ BOT_NAME = "MyBot"
 BOT_VERSION = "1.0"
 
 
+# --- Strategy tuning weights (higher = stronger pull) ---
+W_FOOD_CAPTURE = 1000   # landing exactly on food
+W_FOOD_PROX    = 8      # per-cell closer to nearest food
+W_SPACE        = 14     # per reachable cell (flood fill) — dominant safety term
+W_EDGE         = 3      # mild center bias
+W_TRAP_PENALTY = 100000 # move whose reachable area < our length (near-certain death)
+W_HEAD_LOSE    = 6000   # entering a cell the opponent can also enter & we lose/tie
+W_HEAD_WIN     = 700    # winnable head-to-head (we're longer) — offensive bonus
+
+
 # ============================================================================
 #  BOT CLASS - Handles connection and game logic
 # ============================================================================
@@ -262,17 +272,21 @@ class MyBot:
     # ========================================================================
 
     def calculate_move(self) -> str | None:
-        """Decide which direction to move.
+        """Decide which direction to move (Balanced, buff-aware strategy).
 
-        This is the main function to customize! It's called every game tick
-        with the current game state, and should return one of:
-            "up", "down", "left", "right"
+        Called every game tick with the current game state; returns one of
+        "up", "down", "left", "right" (or None when there's nothing to do).
 
-        The default strategy:
-            1. Find all safe moves (not into walls or snakes)
-            2. Prefer moves that lead toward the nearest food
-            3. Prefer moves that leave more escape routes open
-            4. Avoid edges when possible
+        Strategy overview:
+            1. Build the set of solid cells (snake bodies), correctly keeping a
+               tail solid when that snake is about to eat and grow.
+            2. Model where the opponent's head can move next tick.
+            3. Score each non-reversing, in-bounds, non-body move by:
+                 - flood-fill reachable space (dominant anti-trap signal),
+                 - food capture / proximity,
+                 - head-to-head contention (win if longer, else avoid),
+                 - mild center bias.
+            4. React to active buffs (shield/ghost/scissors/speed).
 
         Available data:
             self.game_state     - Full game state (see README for format)
@@ -285,111 +299,136 @@ class MyBot:
 
         snakes = self.game_state.get("snakes", {})
         my_snake = snakes.get(str(self.player_id))
-
         if not my_snake or not my_snake.get("body"):
             return None
 
-        head = my_snake["body"][0]              # [x, y] position of our head
+        head = my_snake["body"][0]
         current_dir = my_snake.get("direction", "right")
+        my_len = len(my_snake["body"])
+        my_buff = my_snake.get("buff", "default")
 
-        # Get food items from the game state
+        W, H = self.grid_width, self.grid_height
         foods = self.game_state.get("foods", [])
+        food_cells = {(f["x"], f["y"]) for f in foods}
 
-        # Find the nearest food item
-        nearest_food = None
-        nearest_dist = float('inf')
-        for food in foods:
-            dist = abs(head[0] - food["x"]) + abs(head[1] - food["y"])
-            if dist < nearest_dist:
-                nearest_dist = dist
-                nearest_food = food
-
-        # Build a set of all dangerous positions (occupied by snake bodies).
-        # We exclude tail segments because they'll move away on the next tick.
-        dangerous = set()
-        for snake_data in snakes.values():
-            body = snake_data.get("body", [])
-            for segment in body[:-1]:           # Skip the tail (last segment)
-                dangerous.add((segment[0], segment[1]))
-
-        # Direction vectors
-        directions = {
-            "up": (0, -1),
-            "down": (0, 1),
-            "left": (-1, 0),
-            "right": (1, 0)
-        }
-
-        # Can't reverse direction (e.g. can't go left if currently going right)
+        directions = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
         opposites = {"up": "down", "down": "up", "left": "right", "right": "left"}
 
-        def is_safe(x, y):
-            """Check if a position is safe to move into."""
-            if x < 0 or x >= self.grid_width or y < 0 or y >= self.grid_height:
-                return False
-            return (x, y) not in dangerous
+        # --- Build danger set. Tail vacates next tick UNLESS that snake is about
+        #     to eat (head adjacent to food) and therefore grows. ---
+        # If we have shield/ghost we can pass through bodies, so skip them.
+        pass_through_bodies = my_buff in ("shield", "ghost")
+        dangerous = set()
+        if not pass_through_bodies:
+            for snake_data in snakes.values():
+                body = snake_data.get("body", [])
+                if not body:
+                    continue
+                s_head = body[0]
+                growing = any(abs(s_head[0] - f["x"]) + abs(s_head[1] - f["y"]) == 1
+                              for f in foods)
+                segments = body if growing else body[:-1]
+                for seg in segments:
+                    dangerous.add((seg[0], seg[1]))
 
-        def count_escape_routes(x, y):
-            """Count how many safe moves are available from a position (0-4)."""
-            count = 0
-            for dx, dy in directions.values():
-                if is_safe(x + dx, y + dy):
-                    count += 1
-            return count
-
-        # Find all safe (non-wall, non-snake, non-reversing) moves
-        safe_moves = []
-        for direction, (dx, dy) in directions.items():
-            if direction == opposites.get(current_dir):
+        # --- Opponent next-head reachable cells (for head-to-head reasoning) ---
+        opp_next = set()
+        opp_len = 0
+        opp_buff = "default"
+        for pid, snake_data in snakes.items():
+            if pid == str(self.player_id) or not snake_data.get("body"):
                 continue
-            new_x = head[0] + dx
-            new_y = head[1] + dy
-            if is_safe(new_x, new_y):
-                safe_moves.append({"direction": direction, "x": new_x, "y": new_y})
+            opp_len = len(snake_data["body"])
+            opp_buff = snake_data.get("buff", "default")
+            o_head = snake_data["body"][0]
+            o_dir = snake_data.get("direction", "right")
+            for d, (dx, dy) in directions.items():
+                if d == opposites.get(o_dir):
+                    continue
+                opp_next.add((o_head[0] + dx, o_head[1] + dy))
 
-        # If no safe moves exist, just pick any non-reversing move
-        if not safe_moves:
-            for direction in directions:
-                if direction != opposites.get(current_dir):
-                    return direction
+        def in_bounds(x, y):
+            return 0 <= x < W and 0 <= y < H
+
+        def is_safe(x, y):
+            return in_bounds(x, y) and (x, y) not in dangerous
+
+        def reachable_area(sx, sy, limit):
+            """Capped BFS flood fill: how many free cells we can reach from (sx, sy)."""
+            from collections import deque
+            seen = {(sx, sy)}
+            q = deque([(sx, sy)])
+            area = 0
+            while q and area < limit:
+                x, y = q.popleft()
+                area += 1
+                for dx, dy in directions.values():
+                    nx, ny = x + dx, y + dy
+                    if is_safe(nx, ny) and (nx, ny) not in seen:
+                        seen.add((nx, ny))
+                        q.append((nx, ny))
+            return area
+
+        # Nearest food (Manhattan)
+        nearest_food, nearest_dist = None, float("inf")
+        for f in foods:
+            d = abs(head[0] - f["x"]) + abs(head[1] - f["y"])
+            if d < nearest_dist:
+                nearest_dist, nearest_food = d, f
+
+        # Candidate moves: non-reversing, in-bounds, not into a solid body
+        candidates = []
+        for d, (dx, dy) in directions.items():
+            if d == opposites.get(current_dir):
+                continue
+            nx, ny = head[0] + dx, head[1] + dy
+            if is_safe(nx, ny):
+                candidates.append((d, nx, ny))
+
+        if not candidates:
+            # No safe move — keep going / any non-reverse (let the server decide)
+            for d in directions:
+                if d != opposites.get(current_dir):
+                    return d
             return current_dir
 
-        # ==================================================================
-        #  SCORING - This is where you decide how "good" each move is.
-        #  Higher score = better move. Adjust the weights to change behavior.
-        # ==================================================================
+        # --- Score each candidate ---
+        best_dir, best_score = None, float("-inf")
+        space_cap = max(my_len + 2, 12)  # enough to distinguish trap vs. open
 
-        best_dir = None
-        best_score = float('-inf')
-
-        for move in safe_moves:
+        for d, nx, ny in candidates:
             score = 0
-            new_x, new_y = move["x"], move["y"]
 
-            # --- Food bonus: big reward for landing directly on food ---
-            for food in foods:
-                if new_x == food["x"] and new_y == food["y"]:
-                    score += 1000
-                    break
+            # Space / anti-trap (dominant safety signal)
+            area = reachable_area(nx, ny, space_cap)
+            score += area * W_SPACE
+            if area < my_len:
+                score -= W_TRAP_PENALTY
 
-            # --- Distance to food: prefer moves that get closer ---
+            # Food
+            if (nx, ny) in food_cells:
+                score += W_FOOD_CAPTURE
             if nearest_food:
-                food_dist = abs(new_x - nearest_food["x"]) + abs(new_y - nearest_food["y"])
-                score += (self.grid_width + self.grid_height - food_dist) * 10
+                fd = abs(nx - nearest_food["x"]) + abs(ny - nearest_food["y"])
+                score += (W + H - fd) * W_FOOD_PROX
 
-            # --- Escape routes: prefer moves that don't trap us ---
-            escape_routes = count_escape_routes(new_x, new_y)
-            score += escape_routes * 50
+            # Head-to-head contention with the opponent
+            if (nx, ny) in opp_next:
+                we_win = my_len > opp_len and opp_buff not in ("shield", "scissors")
+                if my_buff == "scissors" or pass_through_bodies or we_win:
+                    score += W_HEAD_WIN          # winnable / cut them down (aggression)
+                else:
+                    score -= W_HEAD_LOSE         # we'd lose or tie — avoid
 
-            # --- Edge avoidance: small bonus for staying away from walls ---
-            edge_dist = min(new_x, self.grid_width - 1 - new_x,
-                           new_y, self.grid_height - 1 - new_y)
-            score += edge_dist * 5
+            # Mild center bias
+            score += min(nx, W - 1 - nx, ny, H - 1 - ny) * W_EDGE
 
-            # --- Update best move ---
+            # Under speed we have half the reaction time → value space more
+            if my_buff == "speed":
+                score += area * W_SPACE
+
             if score > best_score:
-                best_score = score
-                best_dir = move["direction"]
+                best_score, best_dir = score, d
 
         return best_dir
 
